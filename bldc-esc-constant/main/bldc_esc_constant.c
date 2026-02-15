@@ -12,8 +12,10 @@ static const char *TAG = "BLDC_ESC";
 #define ESC_PWM_GPIO                4
 #define ESC_PWM_FREQ_HZ             50
 #define ESC_MIN_PULSE_US            1000
-#define ESC_FIXED_PULSE_US          1250
+#define ESC_FIXED_PULSE_US          1600
 #define ESC_ARM_TIME_MS             4000
+#define ESC_RAMP_STEP_US            5
+#define ESC_RAMP_STEP_TIME_MS       40
 #define ESC_SETTLE_TIME_MS          2000
 
 #define ESC_LEDC_TIMER              LEDC_TIMER_0
@@ -44,6 +46,31 @@ static esp_err_t esc_set_pulse_us(uint32_t pulse_width_us)
     return ledc_update_duty(ESC_LEDC_MODE, ESC_LEDC_CHANNEL);
 }
 
+static esp_err_t esc_ramp_pulse_us(uint32_t start_pulse_us, uint32_t end_pulse_us)
+{
+    if (start_pulse_us == end_pulse_us) {
+        return esc_set_pulse_us(end_pulse_us);
+    }
+
+    uint32_t current_pulse = start_pulse_us;
+    while (current_pulse < end_pulse_us) {
+        uint32_t next_pulse = current_pulse + ESC_RAMP_STEP_US;
+        if (next_pulse > end_pulse_us) {
+            next_pulse = end_pulse_us;
+        }
+
+        esp_err_t err = esc_set_pulse_us(next_pulse);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        current_pulse = next_pulse;
+        vTaskDelay(pdMS_TO_TICKS(ESC_RAMP_STEP_TIME_MS));
+    }
+
+    return ESP_OK;
+}
+
 void app_main(void)
 {
     ledc_timer_config_t timer_cfg = {
@@ -71,7 +98,9 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(ESC_ARM_TIME_MS));
 
     ESP_LOGI(TAG, "Starting motor at fixed pulse: %dus", ESC_FIXED_PULSE_US);
-    ESP_ERROR_CHECK(esc_set_pulse_us(ESC_FIXED_PULSE_US));
+    ESP_LOGI(TAG, "Soft-start ramp: %dus -> %dus", ESC_MIN_PULSE_US, ESC_FIXED_PULSE_US);
+    ESP_ERROR_CHECK(esc_ramp_pulse_us(ESC_MIN_PULSE_US, ESC_FIXED_PULSE_US));
+    ESP_LOGI(TAG, "Holding fixed pulse: %dus", ESC_FIXED_PULSE_US);
     vTaskDelay(pdMS_TO_TICKS(ESC_SETTLE_TIME_MS));
 
     while (1) {
